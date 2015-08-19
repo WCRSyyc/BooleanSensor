@@ -26,12 +26,12 @@ uses that to set the threshold midpoint and deadband.
 // current board? Use as array size for the used pins to prevent
 // multiple sensors on the same pin
 // Should mutiple instance on the same pin be prevented?  Could potentially
-// have a single input but with multiple thresholds
+// have a single input but with multiple (manually configured) thresholds
 
 const uint16_t MAX_ADC = 1023;// ADC == analog to digital conversion
 const uint16_t MIN_ADC = 0;
 const float DEAD_BAND_FACTOR = 0.25;// +/- 25% of the size of the complete range
-const uint16_t FIXED_DEAD_BAND = 40;// +/- 40 should be plenty to prevent jitter/bounce
+const uint16_t FIXED_DEAD_BAND = 20;// +/- 20 should be plenty to prevent jitter/bounce
 const uint16_t MIN_DEADBAND = 5;// prevent jitter while doing initial calibration
 
 /************ static functions common to all instances ***********************/
@@ -76,6 +76,12 @@ void BooleanSensor::dump()
   Serial.print("  readMode: ");
   Serial.print(readMode);
   Serial.println(",");
+  Serial.print("  deadSideBandSize: ");
+  Serial.print(deadSideBandSize);
+  Serial.println(",");
+  Serial.print("  deadSideBandFraction: ");
+  Serial.print(deadSideBandFraction);
+  Serial.println(",");
   Serial.print("  readRange: ");
   Serial.print(readRange.lowerBound);
   Serial.print("..");
@@ -99,28 +105,17 @@ boolean BooleanSensor::read()
   // return ((BooleanSensor*)this)->actualRead(this);
   // return ((BooleanSensor*)this)->BooleanSensor::actualRead(this);
   // SIGH
-  return readMode == 0 ? configRead() : fastRead();
+  readMode == 0 ? configRead() : fastRead();
+  return boolState;
 }// end boolean BooleanSensor::read()
 // boolean BooleanSensor::fastRead(BooleanSensor sensorInstance) {
 //   return sensorInstance.analogToBoolean(analogRead(sensorInstance.sensorPin));
 // }
-boolean BooleanSensor::fastRead() {
-  return analogToBoolean(analogRead(sensorPin));
+inline void BooleanSensor::fastRead() {
+  analogToBoolean(analogRead(sensorPin));
 }
-// boolean BooleanSensor::configRead(BooleanSensor sensorInstance) {
-//   uint16_t raw;
-//   raw = analogRead(sensorInstance.sensorPin);
-//   if (raw < sensorInstance.readRange.lowerBound) {
-//     sensorInstance.readRange.lowerBound = raw;
-//     sensorInstance.rangeToThreshold(sensorInstance.readRange);
-//   }
-//   if (raw > sensorInstance.readRange.upperBound) {
-//     sensorInstance.readRange.upperBound = raw;
-//     sensorInstance.rangeToThreshold(sensorInstance.readRange);
-//   }
-//   return sensorInstance.analogToBoolean(raw);
-// }
-boolean BooleanSensor::configRead() {
+inline void BooleanSensor::configRead()
+{
   boolean newRange = false;
 #ifdef DEBUG
   range_t prevRange = readRange;
@@ -130,7 +125,7 @@ boolean BooleanSensor::configRead() {
   raw = analogRead(sensorPin);
   // readRange.lowerBound = min(readRange.lowerBound, raw);
   // readRange.upperBound = max(readRange.upperBound, raw);
-  // threshold = rangeToThreshold(readRange);
+  // rangeToThreshold();
   if (raw < readRange.lowerBound) {
     readRange.lowerBound = raw;
     newRange = true;
@@ -154,7 +149,7 @@ boolean BooleanSensor::configRead() {
     Serial.print(" at time ");
     Serial.println(micros());
 #endif /* DEBUG */
-    threshold = rangeToThreshold(readRange);
+    rangeToThreshold();
 #ifdef DEBUG
     Serial.print("configRead: threshold ");
     Serial.print(prevThreshold.lowerBound);
@@ -166,59 +161,49 @@ boolean BooleanSensor::configRead() {
     Serial.println(threshold.upperBound);
 #endif /* DEBUG */
   }
-  return analogToBoolean(raw);
-}
+  analogToBoolean(raw);
+}// end inline void BooleanSensor::configRead()
 
-boolean BooleanSensor::analogToBoolean(uint16_t value) {
-  boolean curState = boolState;
+inline void BooleanSensor::analogToBoolean(uint16_t value)
+{
   if (threshold.upperBound - threshold.lowerBound < MIN_DEADBAND) {
     // Do not toggle state until have seen enough input range to create a
     // minimally valid dead band
-    return boolState;
+    return;
   }
 
-  if (boolState) {
-    if (value < threshold.lowerBound) {
-      // Previous state was true/HIGH, and now less than the lower threshold boundary
-      curState = false;
-    }
-  } else {
-    if (value > threshold.upperBound) {
-      // Previous state was false/LOW, and now greater than the upper threshold boundary
-      curState = true;
-    }
+  if (value < threshold.lowerBound) {
+    // value less than the (lower boundary of the) threshold
+    boolState = false;
   }
-#ifdef DEBUG
-  if (curState != boolState) {
-    Serial.print(curState ? "^" : "v");
+  if (value > threshold.upperBound) {
+    // value greater than the (upper boundary of the) threshold
+    boolState = true;
   }
-#endif /* DEBUG */
-  boolState = curState;
-  return boolState;
-}
+}// end of inline void BooleanSensor::analogToBoolean(uint16_t value)
 
 // Determine new dead band threshold limits based on the provided range of input values
-range_t BooleanSensor::rangeToThreshold(range_t inputRange) {
-  range_t thresholdRange;
+inline void BooleanSensor::rangeToThreshold()
+{
   unsigned int median, halfBand;
   // Get the midpoint between the minimum and maximum values to use as
   // the base threshold between LOW and HIGH ADC values.
-  median = (inputRange.upperBound + inputRange.lowerBound) / 2;
+  median = (readRange.upperBound + readRange.lowerBound) / 2;
   // Pick a dead-band size where the boolean state will not change.
-  halfBand = sideBandSize(inputRange);
+  halfBand = sideBandSize();
 
   // Set the threshold with the dead band range boundary limits
-  thresholdRange.lowerBound = max(MIN_ADC, median - halfBand);
-  thresholdRange.upperBound = min(MAX_ADC, median + halfBand);
+  threshold.lowerBound = max(MIN_ADC, median - halfBand);
+  threshold.upperBound = min(MAX_ADC, median + halfBand);
 #ifdef DEBUG
   Serial.print("rangeToThreshold: range ");
   Serial.print(readRange.lowerBound);
   Serial.print("..");
   Serial.print(readRange.upperBound);
   Serial.print(" ==> threshold ");
-  Serial.print(thresholdRange.lowerBound);
+  Serial.print(threshold.lowerBound);
   Serial.print("..");
-  Serial.print(thresholdRange.upperBound);
+  Serial.print(threshold.upperBound);
   Serial.print(" at time ");
   Serial.print(micros());
   Serial.print(" from halfBand ");
@@ -226,14 +211,14 @@ range_t BooleanSensor::rangeToThreshold(range_t inputRange) {
   Serial.print(" with midpoint ");
   Serial.println(median);
 #endif /* DEBUG */
-  return thresholdRange;
-}
+}// end void BooleanSensor::rangeToThreshold()
 
 // Calculate (half of the) size of the threshold dead band, based on the supplied
 // input range, and instance configuration
-uint16_t BooleanSensor::sideBandSize(range_t range) {
+inline uint16_t BooleanSensor::sideBandSize()
+{
   unsigned int extent;
-  extent = range.upperBound - range.lowerBound;// Size of the range
+  extent = readRange.upperBound - readRange.lowerBound;// Size of the range
 
   switch (deadBandMode) {
     case DEAD_BAND_FIXED:
@@ -242,7 +227,7 @@ uint16_t BooleanSensor::sideBandSize(range_t range) {
     case DEAD_BAND_FRACTION:
       return extent * deadSideBandFraction;
       break;
-    default: //DEAD_BAND_MINIMUM
-      return min(extent * deadSideBandFraction, deadSideBandSize);
+    // default: //DEAD_BAND_MINIMUM
   }
-}
+  return min(extent * deadSideBandFraction, deadSideBandSize);
+}// end inline uint16_t BooleanSensor::sideBandSize(range_t range)

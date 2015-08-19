@@ -63,15 +63,15 @@ private:
   range_t readRange;
   range_t threshold;
   void init(uint8_t pin, uint16_t deadband);
-  range_t rangeToThreshold(range_t range);
-  boolean analogToBoolean(uint16_t value);
-  uint16_t sideBandSize(range_t range);
+  void rangeToThreshold();
+  void analogToBoolean(uint16_t value);
+  uint16_t sideBandSize();
   // static boolean fastRead(BooleanSensor sensorInstance);
   // static boolean configRead(BooleanSensor sensorInstance);
-  boolean fastRead();
-  boolean configRead();
-  // boolean (*actualRead)();
-  // boolean (BooleanSensor::*actualRead)();
+  void fastRead();
+  void configRead();
+  // void (*actualRead)();
+  // void (BooleanSensor::*actualRead)();
   uint8_t readMode;
 };
 
